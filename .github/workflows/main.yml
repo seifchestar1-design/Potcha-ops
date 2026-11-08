@@ -1,0 +1,20 @@
+name: Unzip Web App
+on: [push, workflow_dispatch]
+permissions:
+  contents: write
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          if [ -f potcha-ops-webapp.zip ]; then
+            unzip -o potcha-ops-webapp.zip
+            rm -f potcha-ops-webapp.zip
+            rm -rf .github/workflows
+            git config user.name "github-actions"
+            git config user.email "github-actions@github.com"
+            git add -A
+            git commit -m "Extract web app files"
+            git push
+          fi
