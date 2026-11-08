@@ -1,0 +1,7 @@
+# For LOCAL Workers preview only (`bun run cf:preview`) — NOT used by the
+# deployed Worker, which gets its connection string from the HYPERDRIVE
+# binding (wrangler.jsonc).
+#
+# Copy this file to the project root as `.dev.vars` and fill in the
+# session-pooler connection string from docs/SUPABASE_SETUP.md Part 2:
+DATABASE_URL="postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres"

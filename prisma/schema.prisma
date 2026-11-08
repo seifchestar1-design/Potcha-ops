@@ -1,0 +1,332 @@
+// Potcha Ops — database schema
+// Multi-tenant wedding-planning operations platform.
+// Tenant isolation: every business table carries companyId; the API layer
+// enforces scoping on every query (RLS-equivalent for this stack).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================ TENANCY & IDENTITY ============================
+
+model Company {
+  id            String      @id @default(cuid())
+  name          String
+  currency      String      @default("EGP")
+  dateFormat    String      @default("DD/MM/YYYY")
+  plan          String      @default("TRIAL") // subscription-ready: TRIAL | GROWTH | PRO
+  isDemo        Boolean     @default(false)
+  // Platform administration (managed by the Potcha Ops platform admin):
+  isPlatform    Boolean     @default(false) // true only for the internal "Potcha Platform" container that holds ADMIN accounts
+  maxEvents     Int         @default(10) // subscriber quota: concurrent non-archived events
+  maxTeamMembers Int        @default(5) // subscriber quota: non-disabled user seats
+  disabledAt    DateTime? // set = workspace suspended; logins and live sessions are blocked
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  users     User[]
+  events    Event[]
+  vendors   Vendor[]
+  payments  Payment[]
+  tasks     Task[]
+  issues    Issue[]
+  documents Document[]
+  auditLogs AuditLog[]
+  notices   Notice[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  companyId    String
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name         String
+  email        String    @unique
+  phone        String?
+  passwordHash String
+  role         String    @default("OPERATIONS") // ADMIN (platform-level) | CEO | FINANCE | OPERATIONS
+  status       String    @default("ACTIVE") // ACTIVE | INVITED | DISABLED
+  // CEO-granted permission extensions (JSON array of permission keys)
+  extraPerms   String    @default("[]")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+
+  sessions       Session[]
+  plannerEvents  Event[]          @relation("EventPlanner")
+  assignments    EventAssignment[]
+  eventVendors   EventVendor[]    @relation("EventVendorResponsible")
+  tasksAssigned  Task[]           @relation("TaskAssignee")
+  tasksCreated   Task[]           @relation("TaskCreator")
+  runItems       RunSheetItem[]
+  issuesAssigned Issue[]          @relation("IssueAssignee")
+  documents      Document[]       @relation("DocumentUploader")
+  payments       Payment[]        @relation("PaymentRecorder")
+  comments       TaskComment[]
+  auditLogs      AuditLog[]
+  notices        Notice[]         @relation("NoticeAuthor")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+}
+
+// ================================ EVENTS ====================================
+
+model Event {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name             String
+  clientName       String
+  clientPhone      String?
+  clientEmail      String?
+  eventDate        DateTime
+  venue            String?
+  venueAddress     String?
+  guestCount       Int      @default(0)
+  eventType        String   @default("WEDDING") // WEDDING | ENGAGEMENT | HENNA | RECEPTION | OTHER
+  contractValue    Float    @default(0)
+  additionalRevenue Float  @default(0)
+  status           String   @default("LEAD") // LEAD | PROPOSAL_SENT | CONFIRMED | IN_PREPARATION | READY | COMPLETED | ARCHIVED
+  plannerId        String?
+  planner          User?    @relation("EventPlanner", fields: [plannerId], references: [id])
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  assignments EventAssignment[]
+  vendors     EventVendor[]
+  tasks       Task[]
+  runSheet    RunSheetItem[]
+  issues      Issue[]
+  documents   Document[]
+  payments    Payment[]
+  auditLogs   AuditLog[]
+  notices     Notice[]
+}
+
+model EventAssignment {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleNote  String?
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, userId])
+}
+
+// ================================ VENDORS ===================================
+
+// Company-level vendor directory (operational contact info)
+model Vendor {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name          String
+  contactPerson String?
+  phone         String?
+  whatsapp      String?
+  email         String?
+  category      String   @default("OTHER")
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  eventVendors EventVendor[]
+}
+
+// Vendor engaged for a specific event.
+// Operational fields are visible to Operations; financial_* fields are
+// stripped server-side for non-financial roles.
+model EventVendor {
+  id                 String   @id @default(cuid())
+  eventId            String
+  event              Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  vendorId           String?
+  vendor             Vendor?  @relation(fields: [vendorId], references: [id])
+  name               String
+  category           String   @default("OTHER")
+  // --- operational ---
+  contactPerson      String?
+  contactPhone       String?
+  contactWhatsapp    String?
+  confirmationStatus String   @default("NOT_CONTACTED")
+  arrivalTime        String?
+  setupTime          String?
+  responsibleId      String?
+  responsible        User?    @relation("EventVendorResponsible", fields: [responsibleId], references: [id])
+  operationalNotes   String?
+  // --- financial (restricted) ---
+  contractAmount     Float    @default(0)
+  depositAmount      Float    @default(0)
+  paidAmount         Float    @default(0)
+  paymentStatus      String   @default("UNPAID")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  runItems RunSheetItem[]
+  payments Payment[]
+}
+
+// ================================ FINANCE ===================================
+// Immutable ledger: corrections are reversal entries, never silent overwrites.
+
+model Payment {
+  id           String    @id @default(cuid())
+  companyId    String
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  eventId      String
+  event        Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  direction    String // INFLOW | OUTFLOW
+  kind         String // CLIENT_PAYMENT | VENDOR_PAYMENT | EXPENSE
+  amount       Float
+  currency     String    @default("EGP")
+  method       String    @default("BANK_TRANSFER")
+  reference    String?
+  note         String?
+  status       String    @default("PENDING") // PENDING | COMPLETED | REVERSED
+  dueDate      DateTime?
+  paidAt       DateTime?
+  recordedById String
+  recordedBy   User      @relation("PaymentRecorder", fields: [recordedById], references: [id])
+  reversalOfId String?
+  reversalOf   Payment?  @relation("PaymentReversal", fields: [reversalOfId], references: [id])
+  reversals    Payment[] @relation("PaymentReversal")
+  eventVendorId String?
+  eventVendor   EventVendor? @relation(fields: [eventVendorId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// =============================== OPERATIONS =================================
+
+model Task {
+  id           String       @id @default(cuid())
+  companyId    String
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  eventId      String
+  event        Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?
+  assignedToId String?
+  assignedTo   User?        @relation("TaskAssignee", fields: [assignedToId], references: [id])
+  createdById  String
+  createdBy    User         @relation("TaskCreator", fields: [createdById], references: [id])
+  priority     String       @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  status       String       @default("TODO") // TODO | IN_PROGRESS | WAITING | COMPLETED | BLOCKED
+  dueDate      DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  comments TaskComment[]
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model RunSheetItem {
+  id              String       @id @default(cuid())
+  eventId         String
+  event           Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  time            String // "18:00" (HH:mm 24h)
+  activity        String
+  responsibleId   String?
+  responsible     User?        @relation(fields: [responsibleId], references: [id])
+  responsibleName String?
+  eventVendorId   String?
+  eventVendor     EventVendor? @relation(fields: [eventVendorId], references: [id])
+  location        String?
+  notes           String?
+  status          String       @default("PENDING") // PENDING | IN_PROGRESS | DONE | DELAYED
+  sortOrder       Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+model Issue {
+  id              String    @id @default(cuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  eventId         String
+  event           Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  priority        String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  assignedToId    String?
+  assignedTo      User?     @relation("IssueAssignee", fields: [assignedToId], references: [id])
+  status          String    @default("OPEN") // OPEN | IN_PROGRESS | RESOLVED
+  resolutionNotes String?
+  createdAt       DateTime  @default(now())
+  resolvedAt      DateTime?
+}
+
+model Document {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  eventId      String
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name         String
+  category     String   @default("GENERAL") // CONTRACT | FLOOR_PLAN | SCHEDULE | VENDOR_AGREEMENT | GENERAL
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  data         Bytes // private storage; served only via authorized endpoint
+  uploadedById String
+  uploadedBy   User     @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// =============================== GOVERNANCE =================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  eventId    String?
+  event      Event?   @relation(fields: [eventId], references: [id])
+  action     String // e.g. "event.created" | "payment.recorded" | "auth.login"
+  entityType String
+  entityId   String?
+  summary    String
+  metadata   String   @default("{}") // JSON string
+  createdAt  DateTime @default(now())
+}
+
+// Financial-risk / attention flags raised to the CEO (e.g. by Finance)
+model Notice {
+  id         String    @id @default(cuid())
+  companyId  String
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  eventId    String?
+  event      Event?    @relation(fields: [eventId], references: [id])
+  fromUserId String
+  fromUser   User      @relation("NoticeAuthor", fields: [fromUserId], references: [id])
+  level      String    @default("WARNING") // INFO | WARNING | CRITICAL
+  message    String
+  createdAt  DateTime  @default(now())
+  readAt     DateTime?
+}

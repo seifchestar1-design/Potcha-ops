@@ -1,0 +1,35 @@
+// Potcha Ops — Cloudflare Workers config (OpenNext adapter).
+// Two placeholders to replace before deploying (see docs/CLOUDFLARE.md Part 2):
+//   1. hyperdrive[].id — the ID printed by `npx wrangler hyperdrive create ...`
+//   2. "name"          — your Worker name (if you change it, also change
+//                        services[0].service below so they match)
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "potcha-ops",
+  // Bump to a recent date when you deploy; wrangler warns if it is stale.
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": [
+    // Node.js APIs for Prisma, bcryptjs and node:crypto — REQUIRED.
+    // https://developers.cloudflare.com/workers/configuration/compatibility-flags/#nodejs-compatibility-flag
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      // Must stay identical to "name" above.
+      "service": "potcha-ops"
+    }
+  ],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "REPLACE_WITH_YOUR_HYPERDRIVE_ID"
+    }
+  ]
+}
